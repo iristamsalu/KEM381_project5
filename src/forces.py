@@ -1,5 +1,7 @@
+from numba import jit
 import numpy as np
 
+@jit(nopython=True)
 def compute_lj_force(r, sigma, epsilon, rcutoff):
     """Compute Lennard-Jones force magnitude with cutoff."""
     if r >= rcutoff or r < 1e-12:
@@ -7,9 +9,10 @@ def compute_lj_force(r, sigma, epsilon, rcutoff):
     inv_r = sigma / r
     inv_r6 = inv_r ** 6
     inv_r12 = inv_r6 ** 2
-
+    # returns force magnitude in in N (J/m)
     return 24 * epsilon * (2 * inv_r12 - inv_r6) / r
 
+@jit(nopython=True)
 def compute_lj_potential(r, sigma, epsilon, rcutoff):
     """Compute shifted Lennard-Jones potential with zero at cutoff."""
     if r >= rcutoff:
@@ -24,193 +27,198 @@ def compute_lj_potential(r, sigma, epsilon, rcutoff):
     inv_rcut6 = inv_rcut ** 6
     inv_rcut12 = inv_rcut6 ** 2
     shift = 4 * epsilon * (inv_rcut12 - inv_rcut6)
-
+    # returns shifted potential in J
     return potential - shift
 
-def compute_forces_naive(positions, box_size, rcutoff, sigma, epsilon, use_pbc):
-    """Naive O(N^2) force calculation."""
+@jit(nopython=True)
+def compute_forces_naive_virial(positions, box_size, rcutoff, sigma, epsilon):
+    """
+    Naive O(N^2) force calculation for 3D with PBC, including virial sum.
+    
+    Returns: forces (N), potential_energy (J), virial_sum (J, 6 components)
+    """
     n = len(positions)
-    forces = np.zeros_like(positions)
-    potential_energy = 0.0
+    forces = np.zeros_like(positions)   # N
+    potential_energy = 0.0              # J
+    virial_sum = np.zeros(6)            # [xx,yy,zz,xy,xz,yz] in J
 
     for i in range(n):
         for j in range(i + 1, n):
-            rij = positions[i] - positions[j]
-            if use_pbc:
-                rij -= box_size * np.round(rij / box_size)
-            r = np.linalg.norm(rij)
-            if r < rcutoff:
-                fmag = compute_lj_force(r, sigma, epsilon, rcutoff)
-                forces[i] += fmag * rij / r
-                forces[j] -= fmag * rij / r
+            rij = positions[i] - positions[j]           # m
+            # Apply minimum image convention
+            rij -= box_size * np.round(rij / box_size)  # m
+
+            r_sq = np.dot(rij, rij) # m2
+
+            if r_sq < rcutoff**2:
+                r = np.sqrt(r_sq)
+                if r < 1e-12: continue # Avoid division by zero if particles overlap exactly
+
+                f_mag = compute_lj_force(r, sigma, epsilon, rcutoff) # N
+                f_vec = f_mag * (rij / r) # Force on i due to j (N)
+
+                forces[i] += f_vec
+                forces[j] -= f_vec # Newton's 3rd law
+
                 potential_energy += compute_lj_potential(r, sigma, epsilon, rcutoff)
 
-    return forces, potential_energy
+                # Pairwise Virial contribution: rij_alpha * Fij_beta (m * N = J)
+                virial_sum[0] += rij[0] * f_vec[0] # W_xx
+                virial_sum[1] += rij[1] * f_vec[1] # W_yy
+                virial_sum[2] += rij[2] * f_vec[2] # W_zz
+                virial_sum[3] += rij[0] * f_vec[1] # W_xy
+                virial_sum[4] += rij[0] * f_vec[2] # W_xz
+                virial_sum[5] += rij[1] * f_vec[2] # W_yz
 
+    return forces, potential_energy, virial_sum
+
+@jit(nopython=True)
 def build_linked_cells(positions, box_size, rcutoff):
     """
-    Assign particles to cells using the linked-cell algorithm (supports 2D or 3D).
+    Assign particles to cells using the linked-cell algorithm.
 
     Parameters:
-        positions : (N, D) array of particle positions (D=2 or 3)
-        box_size : float, size of the (square or cubic) simulation box
-        rcutoff : float, cutoff radius
+        positions : (N, 3) array of particle positions (m)
+        box_size : float, size of the cubic simulation box (m)
+        rcutoff : float, cutoff radius (m)
 
     Returns:
         head : list of head indices for each cell
         lscl : linked list of particle indices
-        lc_dim : list of number of cells in each dimension
-        rc : actual cell size (scalar)
+        lc_dim : integer, number of cells in each dimension
+        rc : actual cell size (scalar, m)
     """
-    n_particles, dim = positions.shape 
+    n_particles, dim = positions.shape
+    dim = 3
 
     # Divide box into number of cells per dimension
-    # Floor func. to get the largest integer that is less than or equal; func. max to avoid zero division
     lc = max(1, int(np.floor(box_size / rcutoff)))
-    # Create a cell with dimensions [lc, lc] or [lc, lc, lc]
-    lc_dim = [lc] * dim  
+    rc = box_size / lc  # cell size (m)
 
-    rc = box_size / lc  # cell size
-
-    # Constant that represents an empty cell/linked list entry
     EMPTY = -1
-    # Total number of cells depending on dimension
-    if dim == 2:
-        lc_xy = lc_dim[0] * lc_dim[1]
-        # Initialize the head array with 'empty' values, which means all cells start as unoccupied
-        # "head" array will store the index of the most recent particle in each cell
-        head = [EMPTY] * lc_xy
-    else:
-        lc_yz = lc_dim[1] * lc_dim[2]
-        lc_xyz = lc_dim[0] * lc_yz
-        head = [EMPTY] * lc_xyz
-    # Initialize with 'empty' values
-    # The lscl array represents a linked list of particles in each cell
+    # Total nr of cells
+    lc_yz = lc * lc
+    lc_xyz = lc * lc_yz
+    head = [EMPTY] * lc_xyz
     lscl = [EMPTY] * n_particles
 
     for i in range(n_particles):
         # Determine cell index vector (e.g., [x_idx, y_idx, z_idx]) based on particle's positions
-        mc = [int(positions[i][a] / rc) for a in range(dim)]
-        # Ensure particle stays inside boundaries
-        mc = [min(max(0, idx), lc - 1) for idx in mc]
-         # Convert the 2D or 3D cell index vector (mc) to a scalar (1D) index for accessing the 'head' array
-        if dim == 2:
-            c_index = mc[0] * lc_dim[1] + mc[1]
-        else:
-            c_index = mc[0] * lc_yz + mc[1] * lc_dim[2] + mc[2]
+        mc0 = min(lc - 1, int(positions[i, 0] / rc))
+        mc1 = min(lc - 1, int(positions[i, 1] / rc))
+        mc2 = min(lc - 1, int(positions[i, 2] / rc))
+
+        # Convert 3D cell index vector (mc) to a scalar (1D) index for accessing the 'head' array
+        c_index = mc0 * lc_yz + mc1 * lc + mc2
+
         # Add the particle to the linked list of particles in the appropriate cell
-        # The previous particle (or empty if no particle exists) is now the next particle for particle i
         lscl[i] = head[c_index]
-        # Set particle i as the new head of the list in this cell
         head[c_index] = i
 
-    return head, lscl, lc_dim
+    return head, lscl, lc, rc
 
-def compute_forces_lca(positions, box_size, rcutoff, sigma, epsilon, use_pbc):
+@jit(nopython=True)
+def compute_forces_lca_virial(positions, box_size, rcutoff, sigma, epsilon):
     """
-    Compute Lennard-Jones forces and potential energy using the linked-cell algorithm (2D or 3D).
-    
-    Parameters:
-        positions : (N, D) ndarray of particle positions
-        box_size : float (length of cubic or square simulation box)
-        rcutoff : float (cutoff radius)
-        sigma, epsilon : Lennard-Jones parameters
-        use_pbc : bool (whether to apply periodic boundary conditions)
+    Compute LJ forces, potential energy, and virial sum using LCA (3D, PBC).
     
     Returns:
-        forces : (N, D) ndarray of forces
-        potential_energy : float, total Lennard-Jones potential energy
+        forces (N), potential_energy (J), virial_sum (J, 6 components)
     """
-    n_particles, dim = positions.shape
-     # Build the linked cells, head is the list of headers for each cell, lscl is the linked list of particles in each cell
-    head, lscl, lc_dim = build_linked_cells(positions, box_size, rcutoff)
+    n_particles = positions.shape[0]
+    dim = 3
+    # Build the linked cells
+    head, lscl, lc, rc = build_linked_cells(positions, box_size, rcutoff)
 
-    # Indicate an empty cell (no particles in this cell)
-    EMPTY = -1
-
-    # Initialize forces array and potential energy
     forces = np.zeros_like(positions)
     potential_energy = 0.0
+    virial_sum = np.zeros(6)  # [xx,yy,zz,xy,xz,yz] in J
+    EMPTY = -1
 
-    # Create an array of all possible neighbor cell offsets (e.g., 9 offsets for 2D, 27 offsets for 3D)
-    neighbor_offsets = np.array(np.meshgrid(*[[-1, 0, 1]] * dim)).T.reshape(-1, dim)
+    # Create offsets for 27 neighboring cells (including self), Numba-compatible
+    neighbor_offsets = np.array([
+        [dx, dy, dz]
+        for dx in (-1, 0, 1)
+        for dy in (-1, 0, 1)
+        for dz in (-1, 0, 1)
+    ])
 
-    # Iterate over each cell in the simulation box
-    for mc in np.ndindex(*lc_dim):
-        # Calculate the scalar index of the current cell
-        if dim == 2:
-            c_index = mc[0] * lc_dim[1] + mc[1]
-        else:
-            c_index = mc[0] * lc_dim[1] * lc_dim[2] + mc[1] * lc_dim[2] + mc[2]
+    lc_yz = lc * lc  # Precompute for index calculation
 
-        # Get the index of the first particle in the linked list for the current cell
-        i = head[c_index]
-        # While there are particles in this cell
-        while i != EMPTY:
-            # Get the position of particle i
-            pos_i = positions[i]
+    # Iterate over cells
+    for mc0 in range(lc):
+        for mc1 in range(lc):
+            for mc2 in range(lc):
+                # Scalar index of the origin cell
+                c_index_origin = mc0 * lc_yz + mc1 * lc + mc2
+                # Get the first particle 'i' in the origin cell
+                i = head[c_index_origin]
 
-            # Iterate over all the neighbors of the current cell
-            for offset in neighbor_offsets:
-                # Get the neighboring cell's index by adding the offset
-                mc1 = np.array(mc) + offset
-                # Initialize the shift for periodic boundary conditions
-                rshift = np.zeros(dim)
+                while i != EMPTY:
+                    pos_i = positions[i]  # Position of particle i (m)
+                    # Iterate over neighboring cells (including the origin cell itself)
+                    for offset in neighbor_offsets:
+                        # Index vector of the neighbor cell
+                        mc_neighbor = np.array([mc0, mc1, mc2]) + offset
+                        rshift = np.zeros(dim)  # Shift due to PBC wrap-around
 
-                # Check if the neighboring cell is valid and handle PBC
-                valid_cell = True
-                for a in range(dim):
-                    if use_pbc:
-                        # Apply PBC
-                        if mc1[a] < 0:
-                            mc1[a] += lc_dim[a]     # Wrap around to the opposite side
-                            rshift[a] = -box_size   # Apply the shift for PB
-                        elif mc1[a] >= lc_dim[a]:
-                            mc1[a] -= lc_dim[a]     # Wrap around to the opposite side
-                            rshift[a] = box_size    # Apply the shift for PB
-                    else:
-                        # Without PBC, check if the neighboring cell is out of bounds
-                        if mc1[a] < 0 or mc1[a] >= lc_dim[a]:
-                            valid_cell = False  # If the neighbor is out of bounds, skip this neighbor
-                            break
-                # If the neighbor cell is out of bounds and PBC is not applied, skip this iteration
-                if not valid_cell:
-                    continue
+                        # Apply PBC to neighbor cell indices and determine shift
+                        for a in range(dim):
+                            if mc_neighbor[a] < 0:
+                                mc_neighbor[a] += lc
+                                rshift[a] = -box_size
+                            elif mc_neighbor[a] >= lc:
+                                mc_neighbor[a] -= lc
+                                rshift[a] = box_size
 
-                # Calculate the scalar index of the neighboring cell
-                if dim == 2:
-                    c1 = mc1[0] * lc_dim[1] + mc1[1]
-                else:
-                    c1 = mc1[0] * lc_dim[1] * lc_dim[2] + mc1[1] * lc_dim[2] + mc1[2]
+                        # Scalar index of the neighbor cell
+                        c_index_neighbor = (
+                            mc_neighbor[0] * lc_yz + mc_neighbor[1] * lc + mc_neighbor[2]
+                        )
 
-                # Get the index of the first particle in the linked list of the neighboring cell
-                j = head[c1]
-                # While there are particles in this neighboring cell
-                while j != EMPTY:
-                    # Avoid double-counting pairs (i, j) and (j, i)
-                    if j > i:
-                        # Get the position of particle j, including the periodic boundary shift
-                        pos_j = positions[j] + rshift
-                        # Calculate the displacement between i and j
-                        r_ij = pos_i - pos_j
-                        dist = np.linalg.norm(r_ij)
+                        # Get the first particle 'j' in the neighbor cell
+                        j = head[c_index_neighbor]
+                        while j != EMPTY:
+                            if c_index_origin < c_index_neighbor or (
+                                c_index_origin == c_index_neighbor and j > i
+                            ):
+                                # Position of particle j, adjusted by PBC shift (m)
+                                pos_j_shifted = positions[j] + rshift
 
-                        # If the distance is within the cutoff range
-                        if dist < rcutoff and dist > 1e-12:
-                            # Compute the Lennard-Jones force magnitude and direction between particles i and j
-                            f_mag = compute_lj_force(dist, sigma, epsilon, rcutoff)
-                            # Normalize the force direction
-                            fij = f_mag * (r_ij / dist)
+                                # Vector from j to i (m)
+                                rij = pos_i - pos_j_shifted
+                                r_sq = np.dot(rij, rij)  # m^2
 
-                            # Accumulate the forces on particles i and j
-                            forces[i] += fij
-                            forces[j] -= fij  # Newton's 3rd law
+                                if r_sq < rcutoff ** 2:
+                                    r = np.sqrt(r_sq)  # m
+                                    if r < 1e-12:
+                                        j = lscl[j]
+                                        continue  # Avoid division by zero
 
-                            # Accumulate potential energy between particles i and j
-                            potential_energy += compute_lj_potential(dist, sigma, epsilon, rcutoff)
-                    # Move to the next particle in the linked list for cell c1
-                    j = lscl[j]
-            # Move to the next particle in the linked list for cell c
-            i = lscl[i]
+                                    # Compute force magnitude and vector (force on i due to j)
+                                    f_mag = compute_lj_force(r, sigma, epsilon, rcutoff)  # N
+                                    f_vec = f_mag * (rij / r)  # N
 
-    return forces, potential_energy
+                                    # Accumulate forces
+                                    forces[i] += f_vec
+                                    forces[j] -= f_vec  # Newton's 3rd law
+
+                                    # Accumulate potential energy
+                                    potential_energy += compute_lj_potential(
+                                        r, sigma, epsilon, rcutoff
+                                    )  # J
+
+                                    # Accumulate Pairwise Virial contribution: rij_alpha * Fij_beta (J)
+                                    virial_sum[0] += rij[0] * f_vec[0]  # W_xx
+                                    virial_sum[1] += rij[1] * f_vec[1]  # W_yy
+                                    virial_sum[2] += rij[2] * f_vec[2]  # W_zz
+                                    virial_sum[3] += rij[0] * f_vec[1]  # W_xy
+                                    virial_sum[4] += rij[0] * f_vec[2]  # W_xz
+                                    virial_sum[5] += rij[1] * f_vec[2]  # W_yz
+
+                            # Move to the next particle 'j' in the neighbor cell's list
+                            j = lscl[j]
+                    # Move to the next particle 'i' in the origin cell's list
+                    i = lscl[i]
+
+    return forces, potential_energy, virial_sum

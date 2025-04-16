@@ -1,17 +1,29 @@
 import numpy as np
 
-def langevin_thermostat(velocities, dt, temperature, friction_coef):
+def langevin_thermostat(velocities, dt, temperature, friction_coef, mass, kb):
     """Apply Langevin thermostat."""
-    random_force = np.sqrt(2 * friction_coef * temperature * dt) * np.random.normal(0, 1, velocities.shape)
-    # random_force = np.sqrt(6 * friction_coef * temperature * dt) * (np.random.uniform(0, 1, velocities.shape) - 0.5)
-    dissipative_force = -friction_coef * velocities * dt
-    return velocities + dissipative_force + random_force
+    # Random acceleration (m/s2)
+    random_vel = np.sqrt(2 * friction_coef * kb * temperature * dt) * np.random.normal(0, 1, velocities.shape) / mass
 
-def berendsen_thermostat(velocities, dt, target_temperature, tau, dimensions, n_particles):
+    # Dissipative acceleration (m/s2)
+    dissipative_vel = - friction_coef / mass * velocities * dt
+
+    # Update velocities
+    return velocities + dissipative_vel + random_vel
+
+def berendsen_thermostat(velocities, dt, target_temperature, tau, n_particles, mass, kb):
     """Apply Berendsen thermostat to rescale velocities."""
-    # Compute kinetic energy to measure the current temperature
-    kinetic_energy = 0.5 * np.sum(velocities ** 2)
-    current_temperature = (2 * kinetic_energy) / (dimensions * n_particles)
+    # tau is the coupling time constant in seconds
+    dimensions = 3
+    # Compute kinetic energy in Joules
+    kinetic_energy = 0.5 * mass * np.sum(velocities ** 2)
+    
+    # Calculate current temperature in Kelvin
+    # DOF = 3N
+    dof = dimensions * n_particles 
+    current_temperature = (2 * kinetic_energy) / (dof * kb)
 
+    # Calculate scaling factor lambda
     lambda_factor = np.sqrt(1 + (dt / tau) * ((target_temperature / current_temperature) - 1))
+
     return velocities * lambda_factor
