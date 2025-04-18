@@ -13,8 +13,8 @@ AMU_TO_KG = 1.66054e-27 # kg/amu
 ARGON_MASS_KG = ARGON_MASS_AMU * AMU_TO_KG # kg
 
 # Change depending on the desired system
-DEFAULT_TEMP_K = 90.0 # K
-DEFAULT_DENSITY_KG_M3 = 1374.0 # kg/m3 (90K, 1atm)
+DEFAULT_TEMP_K = 107.7 # K
+DEFAULT_DENSITY_KG_M3 = 1296.2 # kg/m3 (90K, 1atm)
 DEFAULT_TIMESTEP_S = 5e-15 # 5 femtoseconds (s)
 DEFAULT_RCUTOFF_FACTOR = 2.5 # Cutoff radius as a multiple of sigma
 DEFAULT_RCUTOFF_M = DEFAULT_RCUTOFF_FACTOR * ARGON_SIGMA # m
@@ -95,10 +95,10 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Lennard-Jones MD simulation in real units (default: Argon)")
     
     # Arguments for the simulation
-    parser.add_argument("--steps", type=int, default=10000, help="Number of simulation steps")
+    parser.add_argument("--steps", type=int, default=100000, help="Number of simulation steps")
     parser.add_argument("--dt", type=float, default=DEFAULT_TIMESTEP_S, help=f"Timestep in seconds (Default: {DEFAULT_TIMESTEP_S:.1e} s)")
     parser.add_argument("--density", type=float, default=DEFAULT_DENSITY_KG_M3, help=f"Mass density in kg/m3 (Default: {DEFAULT_DENSITY_KG_M3:.1f} kg/m3)")
-    parser.add_argument("--n_particles", type=int, default=256, help="Number of particles (Default: 256)")
+    parser.add_argument("--n_particles", type=int, default=1024, help="Number of particles (Default: 1024)")
     parser.add_argument("--temperature", type=float, default=DEFAULT_TEMP_K, help=f"Desired temperature in Kelvin (Default: {DEFAULT_TEMP_K:.1f} K)")
     # Allow overriding LJ parameters, but default to Argon
     parser.add_argument("--sigma", type=float, default=ARGON_SIGMA, help=f"Lennard-Jones sigma parameter in meters (Default: {ARGON_SIGMA:.3e} m)")

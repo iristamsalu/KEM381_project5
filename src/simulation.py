@@ -34,7 +34,7 @@ class Simulation:
         self.thermostat_constant = config.thermostat_constant
 
         print("Initializing simulation (3D, Real Units)...")
-        print(f"Box size: {self.box_size:.3e} m, Volume: {self.volume:.3e} m^3")
+        print(f"Box size: {self.box_size:.3e} m, Volume: {self.volume:.3e} m^3, Number density: {self.num_density:.3e} particles/m^3")
 
         # Create initial 3D lattice (m)
         self.positions = self.create_lattice()
@@ -189,17 +189,17 @@ class Simulation:
                 pf.write(f"{step} {current_sim_time:.6e} {pt_offdiag[0]:.6e} {pt_offdiag[1]:.6e} {pt_offdiag[2]:.6e}\n")
 
             # Save energy/temp periodically
-            if step % 10 == 0:
+            if step % 100 == 0:
                  current_temp = kinetic_energy / (1.5 * self.n_particles * self.kb)
                  with open(self.energy_file, "a") as ef:
                       ef.write(f"{step} {current_sim_time:.6e} {kinetic_energy:.6e} {potential_energy:.6e} {total_energy:.6e} {current_temp:.3f}\n")
 
             # Save positions periodically
-            if step % 100 == 0:
+            if step % 10 == 0:
                 save_xyz(self.positions, self.trajectory_file, step)
 
             # Print progress periodically
-            if step % 10 == 0:
+            if step % 10000 == 0:
                 current_temp = kinetic_energy / (1.5 * self.n_particles * self.kb) 
                 print(f"Step: {step:10d} | Time: {current_sim_time:8.3e} s | Temp: {current_temp:8.2f} K | Pxy: {pt_offdiag[0]:10.4e} Pa")
         
