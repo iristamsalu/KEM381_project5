@@ -15,13 +15,17 @@ ARGON_MASS_KG = ARGON_MASS_AMU * AMU_TO_KG # kg
 # Change depending on the desired system
 DEFAULT_TEMP_K = 107.7 # K
 DEFAULT_DENSITY_KG_M3 = 1296.2 # kg/m3 (90K, 1atm)
-DEFAULT_TIMESTEP_S = 5e-15 # 5 femtoseconds (s)
+DEFAULT_TIMESTEP_S = 2e-15 # 5 femtoseconds (s)
 DEFAULT_RCUTOFF_FACTOR = 2.5 # Cutoff radius as a multiple of sigma
 DEFAULT_RCUTOFF_M = DEFAULT_RCUTOFF_FACTOR * ARGON_SIGMA # m
 
 # Default Thermostat constants in real units
 DEFAULT_BERENDSEN_TAU_S = 0.5e-12 # 0.5 picoseconds (s)
 DEFAULT_LANGEVIN_GAMMA_KGS = ARGON_MASS_KG / DEFAULT_BERENDSEN_TAU_S # kg/s
+# Add these near other default constants
+DEFAULT_TARGET_PRESSURE_PA = 8.934100e5  # in Pascals
+DEFAULT_NH_Q = 0.001  # Default Nose-Hoover coupling constant
+DEFAULT_PR_W = 0.005  # Default Parrinello-Rahman coupling constant
 
 @dataclass
 class Configuration:
@@ -55,7 +59,12 @@ class Configuration:
     # Default parameters
     mass: float = ARGON_MASS_KG         # Particle mass in kg
     kb: float = BOLTZMANN_CONSTANT      # Boltzmann constant in J/K
-
+    # NPT parameters
+    use_npt: bool = False  # Enable/disable NPT ensemble
+    target_pressure: float = DEFAULT_TARGET_PRESSURE_PA  # Target pressure in Pa
+    nh_Q: float = DEFAULT_NH_Q  # Nosé-Hoover coupling constant
+    pr_W: float = DEFAULT_PR_W  # Parrinello-Rahman coupling constant
+    
     def __post_init__(self):
         """Calculate derived properties after arguments are parsed."""
         if self.mass <= 0:
@@ -112,7 +121,12 @@ def parse_args():
     thermo_group.add_argument("--use_langevin", action="store_true", help="Use Langevin thermostat")
     thermo_group.add_argument("--use_berendsen", action="store_true", help="Use Berendsen thermostat")
     parser.add_argument("--thermostat_constant", type=float, default=None, help="Thermostat constant (Langevin: gamma in kg/s, Berendsen: tau in s)")
-
+    # Add these new arguments for NPT
+    parser.add_argument("--use_npt", action="store_true", help="Enable NPT ensemble (constant pressure)")
+    parser.add_argument("--target_pressure", type=float, default=DEFAULT_TARGET_PRESSURE_PA,
+                       help=f"Target pressure in Pascals (Default: {DEFAULT_TARGET_PRESSURE_PA:.3e} Pa = 1 atm)")
+    parser.add_argument("--nh_Q", type=float, default=DEFAULT_NH_Q, help=f"Nosé-Hoover coupling constant (Default: {DEFAULT_NH_Q:.1f})")
+    parser.add_argument("--pr_W", type=float, default=DEFAULT_PR_W, help=f"Parrinello-Rahman coupling constant (Default: {DEFAULT_PR_W:.1f})")
     args = parser.parse_args()
 
     # Set a default thermostat constant
@@ -125,6 +139,15 @@ def parse_args():
         elif args.use_berendsen:
             args.thermostat_constant = DEFAULT_BERENDSEN_TAU_S
             print(f"Info: Using default Berendsen tau = {args.thermostat_constant:.3e} s")
+        # Additional validation for NPT parameters
+        elif args.use_npt:
+            print("Warning: NPT ensemble uses Nosé-Hoover thermostat - Langevin/Berendsen flags will be ignored")
+            args.use_langevin = False
+            args.use_berendsen = False
+            validate_positive(args.target_pressure, "Target pressure")
+            validate_positive(args.nh_Q, "Nose-Hoover Q")
+            validate_positive(args.pr_W, "Parrinello-Rahman W")
+            print(f"Info: Using NPT ensemble with target pressure = {args.target_pressure:.3e} Pa")
         else:
              # Default to Langevin if neither specified
              args.use_langevin = True
@@ -163,7 +186,11 @@ def parse_args():
         use_lca=args.use_lca,
         use_langevin=args.use_langevin,
         use_berendsen=args.use_berendsen,
-        thermostat_constant=args.thermostat_constant
+        thermostat_constant=args.thermostat_constant,
+        use_npt=args.use_npt,
+        target_pressure=args.target_pressure,
+        nh_Q=args.nh_Q,
+        pr_W=args.pr_W,
     )
 
     return config

@@ -4,7 +4,7 @@ import os
 from config import Configuration
 from output_and_plots import save_xyz
 from forces import compute_forces_lca_virial, compute_forces_naive_virial
-from thermostats import langevin_thermostat, berendsen_thermostat
+from thermostats import langevin_thermostat, berendsen_thermostat, nose_hoover_thermostat, parrinello_rahman_barostat
 
 class Simulation:
     def __init__(self, config: Configuration):
@@ -32,13 +32,17 @@ class Simulation:
         self.use_langevin = config.use_langevin
         self.use_berendsen = config.use_berendsen
         self.thermostat_constant = config.thermostat_constant
-
-        print("Initializing simulation (3D, Real Units)...")
-        print(f"Box size: {self.box_size:.3e} m, Volume: {self.volume:.3e} m^3, Number density: {self.num_density:.3e} particles/m^3")
+        # NPT parameters
+        self.use_npt = config.use_npt  # Boolean to enable/disable NPT
+        self.target_pressure = config.target_pressure  # Target pressure in Pa
+        self.nh_Q = config.nh_Q  # Nosé-Hoover coupling constant
+        self.pr_W = config.pr_W  # Parrinello-Rahman coupling constant
+        self.zeta = 0.0  # Initialize thermostat variable
 
         # Create initial 3D lattice (m)
-        self.positions = self.create_lattice()
-
+        # self.positions = self.create_lattice()
+        self.positions = self.read_xyz("npt_final.xyz")
+        # print(f"Initial positions loaded from file: {self.positions}")
         # Initialize velocities (m/s) randomly and adjust to desired temperature
         self.velocities, self.kinetic_energy = self.initialize_velocities()
 
@@ -88,6 +92,56 @@ class Simulation:
         if len(positions) != self.n_particles:
              positions = positions[:self.n_particles] 
         return positions
+
+    def minimize_energy_steepest_descent(self, max_steps=5000, force_tol=1e-6, step_size=0.01):
+        print("\nStarting energy minimization (steepest descent)...")
+        print(f"Convergence criterion: max force < {force_tol:.1e} N")
+
+        # Store original positions to avoid modifying self.positions directly
+        minimized_positions = self.positions.copy()
+        converged = False
+
+        for n_steps in range(max_steps):
+            # Compute forces and potential energy
+            forces, potential_energy, _ = self.compute_forces_virial(
+                minimized_positions, self.box_size, self.rcutoff,
+                self.sigma, self.epsilon
+            )
+
+            # Check convergence
+            max_force = np.max(np.abs(forces))
+            if max_force < force_tol:
+                converged = True
+                print(f"Converged after {n_steps} steps with max force = {max_force:.3e} N")
+                break
+            
+            # Steepest descent step: r_new = r_old + step_size * F/m (displace along forces)
+            displacement = step_size * forces / self.mass
+            minimized_positions += displacement
+
+            # Apply periodic boundary conditions
+            minimized_positions = self.apply_boundary_conditions(minimized_positions)
+
+            # Adaptive step size - reduce if energy increases
+            new_forces, new_pe, _ = self.compute_forces_virial(
+                minimized_positions, self.box_size, self.rcutoff,
+                self.sigma, self.epsilon
+            )
+
+            if new_pe > potential_energy:
+                step_size *= 0.5  # Reduce step size if energy increased
+                minimized_positions -= displacement  # Revert step
+            else:
+                step_size *= 1.05  # Slightly increase step size if energy decreased
+
+            # Print progress
+            if n_steps % 100 == 0:
+                print(f"Min step {n_steps}: PE = {potential_energy:.3e} J, max F = {max_force:.3e} N, step size = {step_size:.3f}")
+
+        if not converged:
+            print(f"Warning: Minimization did not converge after {max_steps} steps (max F = {max_force:.3e} N)")
+
+        return minimized_positions, n_steps, converged
 
     def initialize_velocities(self):
         """Generate initial velocities from Maxwell-Boltzmann distribution (m/s)."""
@@ -164,6 +218,90 @@ class Simulation:
         positions %= self.box_size
         return positions
 
+    def npt_step(self):
+        """Perform one step of NPT integration using Nosé-Hoover and Parrinello-Rahman"""
+
+        # Half-step velocity update
+        self.velocities += 0.5 * self.dt * self.forces / self.mass
+
+        # Apply Nose-Hoover thermostat
+        if self.use_npt:
+            self.velocities, self.zeta = nose_hoover_thermostat(
+                velocities=self.velocities,
+                dt=self.dt,
+                temperature=self.temperature,
+                kb=self.kb,
+                mass=self.mass,
+                Q=self.nh_Q,
+                zeta=self.zeta
+            )
+
+        # Update positions
+        temp_positions = self.positions + self.velocities * self.dt
+
+        # Apply Parrinello-Rahman barostat
+        if self.use_npt:
+            (temp_positions, 
+             self.velocities, 
+             self.box_size, 
+             scaling_factor) = parrinello_rahman_barostat(
+                positions=temp_positions,
+                velocities=self.velocities,
+                forces=self.forces,
+                dt=self.dt,
+                pressure=self.target_pressure,
+                W=self.pr_W,
+                box_size=self.box_size,
+                mass=self.mass  # Add this parameter
+            )
+            # Update system properties that depend on box size
+            self.volume = self.box_size**3
+            self.num_density = self.n_particles / self.volume
+            self.density = self.num_density * self.mass
+
+            self.positions = self.apply_boundary_conditions(temp_positions)
+
+            # Compute new forces
+            self.forces, self.potential_energy, self.virial_sum = self.compute_forces_virial(
+                self.positions, self.box_size, self.rcutoff,
+                self.sigma, self.epsilon)
+
+            # 2nd half-step velocity update
+            self.velocities += 0.5 * self.dt * self.forces / self.mass
+
+            # Compute energies and pressure
+            self.kinetic_energy = 0.5 * self.mass * np.sum(self.velocities**2)
+            self.total_energy = self.kinetic_energy + self.potential_energy
+            self.update_pressure_tensor()
+
+            return self.kinetic_energy, self.potential_energy, self.total_energy, self.pressure_tensor[3:]
+
+    def read_xyz(self, filename):
+        with open(filename, 'r') as f:
+            lines = [line.strip() for line in f if line.strip()]
+
+        # Parse XYZ file
+        n_atoms = int(lines[0])
+        positions = []
+
+        for line in lines[2:2+n_atoms]:  # Skip first 2 lines (atom count and comment)
+            parts = line.split()
+            # Convert Angstroms to meters if needed (detect by typical values)
+            x, y, z = map(float, parts[1:4])
+            if max(abs(x), abs(y), abs(z)) > 10:  # Likely in Ångstroms
+                x, y, z = x*1e-10, y*1e-10, z*1e-10
+            positions.append([x, y, z])
+
+        positions = np.array(positions)
+
+        positions %= self.box_size 
+
+        # Verify atom count matches simulation
+        if len(positions) != self.n_particles:
+            raise ValueError(f"XYZ file contains {len(positions)} atoms but simulation expects {self.n_particles}")
+
+        return positions
+    
     def simulate_LJ(self):
         """Run Lennard-Jones simulation collecting pressure tensor data."""
 
@@ -173,35 +311,70 @@ class Simulation:
         with open(self.pressure_file, "w") as pf:
             pf.write("# Step Time(s) Pxy(Pa) Pxz(Pa) Pyz(Pa)\n")
         with open(self.energy_file, "w") as ef:
-             ef.write("# Step Time(s) KE(J) PE(J) TotalE(J) Temp(K)\n")
+             ef.write("# Step Time(s) KE(J) PE(J) TotalE(J) Temp(K) Volume\n")
       
         print("Starting simulation...")
         # Start tracking computational time
         start_time = time.time()
-
+        # # Perform energy minimization before starting the simulation
+        # minimized_positions, n_steps, converged = self.minimize_energy_steepest_descent()
+        # if converged:
+        #     self.positions = minimized_positions
+        #     print(f"Minimized positions: {self.positions}")
+        # else:
+        #     print("Warning: Minimization did not converge. Continuing with initial positions.")
+         
         # Simulation loop
-        for step in range(self.steps+1):
-            kinetic_energy, potential_energy, total_energy, pt_offdiag = self.velocity_verlet_step()
-            current_sim_time = step * self.dt
+        if self.use_npt:
+            # Simulation loop
+            for step in range(self.steps+1):
+                kinetic_energy, potential_energy, total_energy, pt_offdiag = self.npt_step()
+    
+                current_sim_time = step * self.dt
 
-            # Save pressure tensor at every step
-            with open(self.pressure_file, "a") as pf:
-                pf.write(f"{step} {current_sim_time:.6e} {pt_offdiag[0]:.6e} {pt_offdiag[1]:.6e} {pt_offdiag[2]:.6e}\n")
+                # Save pressure tensor at every step
+                with open(self.pressure_file, "a") as pf:
+                    pf.write(f"{step} {current_sim_time:.6e} {pt_offdiag[0]:.6e} {pt_offdiag[1]:.6e} {pt_offdiag[2]:.6e}\n")
 
-            # Save energy/temp periodically
-            if step % 100 == 0:
-                 current_temp = kinetic_energy / (1.5 * self.n_particles * self.kb)
-                 with open(self.energy_file, "a") as ef:
-                      ef.write(f"{step} {current_sim_time:.6e} {kinetic_energy:.6e} {potential_energy:.6e} {total_energy:.6e} {current_temp:.3f}\n")
+                # Save energy/temp periodically
+                if step % 100 == 0:
+                     current_temp = kinetic_energy / (1.5 * self.n_particles * self.kb)
+                     with open(self.energy_file, "a") as ef:
+                          ef.write(f"{step} {current_sim_time:.6e} {kinetic_energy:.6e} {potential_energy:.6e} {total_energy:.6e} {current_temp:.3f} {self.volume:.6e}\n")
 
-            # Save positions periodically
-            if step % 10 == 0:
-                save_xyz(self.positions, self.trajectory_file, step)
+                # Save positions periodically
+                if step % 10 == 0:
+                    save_xyz(self.positions, self.trajectory_file, step)
 
-            # Print progress periodically
-            if step % 10000 == 0:
-                current_temp = kinetic_energy / (1.5 * self.n_particles * self.kb) 
-                print(f"Step: {step:10d} | Time: {current_sim_time:8.3e} s | Temp: {current_temp:8.2f} K | Pxy: {pt_offdiag[0]:10.4e} Pa")
+                # Print progress periodically
+                if step % 10000 == 0:
+                    current_temp = kinetic_energy / (1.5 * self.n_particles * self.kb) 
+                    print(f"Step: {step:10d} | Time: {current_sim_time:8.3e} s | Temp: {current_temp:8.2f} K | Pxy: {pt_offdiag[0]:10.4e} Pa")
+
+        else:
+            for step in range(self.steps+1):
+                kinetic_energy, potential_energy, total_energy, pt_offdiag = self.velocity_verlet_step()
+                current_sim_time = step * self.dt
+
+                # Save pressure tensor at every step
+                with open(self.pressure_file, "a") as pf:
+                    pf.write(f"{step} {current_sim_time:.6e} {pt_offdiag[0]:.6e} {pt_offdiag[1]:.6e} {pt_offdiag[2]:.6e}\n")
+
+                # Save energy/temp periodically
+                if step % 100 == 0:
+                     current_temp = kinetic_energy / (1.5 * self.n_particles * self.kb)
+                     with open(self.energy_file, "a") as ef:
+                          ef.write(f"{step} {current_sim_time:.6e} {kinetic_energy:.6e} {potential_energy:.6e} {total_energy:.6e} {current_temp:.3f}\n")
+
+                periodicity = 10
+                # Save positions periodically
+                if step % periodicity == 0:
+                    save_xyz(self.positions, self.trajectory_file, step+periodicity)
+
+                # Print progress periodically
+                if step % 10000 == 0:
+                    current_temp = kinetic_energy / (1.5 * self.n_particles * self.kb) 
+                    print(f"Step: {step:10d} | Time: {current_sim_time:8.3e} s | Temp: {current_temp:8.2f} K | Pxy: {pt_offdiag[0]:10.4e} Pa")
         
         end_time = time.time()
         total_runtime = end_time - start_time
