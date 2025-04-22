@@ -30,47 +30,6 @@ def compute_lj_potential(r, sigma, epsilon, rcutoff):
     # returns shifted potential in J
     return potential - shift
 
-@jit(nopython=True)
-def compute_forces_naive_virial(positions, box_size, rcutoff, sigma, epsilon):
-    """
-    Naive O(N^2) force calculation for 3D with PBC, including virial sum.
-    
-    Returns: forces (N), potential_energy (J), virial_sum (J, 6 components)
-    """
-    n = len(positions)
-    forces = np.zeros_like(positions)   # N
-    potential_energy = 0.0              # J
-    virial_sum = np.zeros(6)            # [xx,yy,zz,xy,xz,yz] in J
-
-    for i in range(n):
-        for j in range(i + 1, n):
-            rij = positions[i] - positions[j]           # m
-            # Apply minimum image convention
-            rij -= box_size * np.round(rij / box_size)  # m
-
-            r_sq = np.dot(rij, rij) # m2
-
-            if r_sq < rcutoff**2:
-                r = np.sqrt(r_sq)
-                if r < 1e-12: continue # Avoid division by zero if particles overlap exactly
-
-                f_mag = compute_lj_force(r, sigma, epsilon, rcutoff) # N
-                f_vec = f_mag * (rij / r) # Force on i due to j (N)
-
-                forces[i] += f_vec
-                forces[j] -= f_vec # Newton's 3rd law
-
-                potential_energy += compute_lj_potential(r, sigma, epsilon, rcutoff)
-
-                # Pairwise Virial contribution: rij_alpha * Fij_beta (m * N = J)
-                virial_sum[0] += rij[0] * f_vec[0] # W_xx
-                virial_sum[1] += rij[1] * f_vec[1] # W_yy
-                virial_sum[2] += rij[2] * f_vec[2] # W_zz
-                virial_sum[3] += rij[0] * f_vec[1] # W_xy
-                virial_sum[4] += rij[0] * f_vec[2] # W_xz
-                virial_sum[5] += rij[1] * f_vec[2] # W_yz
-
-    return forces, potential_energy, virial_sum
 
 @jit(nopython=True)
 def build_linked_cells(positions, box_size, rcutoff):
@@ -118,7 +77,7 @@ def build_linked_cells(positions, box_size, rcutoff):
     return head, lscl, lc, rc
 
 @jit(nopython=True)
-def compute_forces_lca_virial(positions, box_size, rcutoff, sigma, epsilon):
+def compute_forces_virial(positions, box_size, rcutoff, sigma, epsilon):
     """
     Compute LJ forces, potential energy, and virial sum using LCA (3D, PBC).
     
