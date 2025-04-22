@@ -22,15 +22,15 @@ def unnormalized_autocorrelation(x):
     return sacf # Units: units(x)^2, e.g., Pa^2
 
 # --- Configuration & Constants ---
-DATA_FILE = 'output/pressure.dat' 
-VOLUME =5.240e-26         # Volume in m^3
+DATA_FILE = 'pressure.dat' 
+VOLUME = 9.380892e-26      # Volume in m^3
 KB = 1.380649e-23          # Boltzmann constant in J/K
 TEMPERATURE = 107.7        # Temperature in K
 
 # Time limit for integration (in ps) - Choose based on SACF decay
 # Look at the SACF plot and choose a time after which it's mostly noise around zero.
 # Start with a value like 10-20 ps and adjust.
-INTEGRATION_TIME_PS = 100 
+INTEGRATION_TIME_PS = 50 
 
 # --- Load Data ---
 if not os.path.exists(DATA_FILE):
