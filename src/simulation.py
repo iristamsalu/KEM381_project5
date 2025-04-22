@@ -40,8 +40,8 @@ class Simulation:
         self.zeta = 0.0  # Initialize thermostat variable
 
         # Create initial 3D lattice (m)
-        # self.positions = self.create_lattice()
-        self.positions = self.read_xyz("npt_final.xyz")
+        self.positions = self.create_lattice()
+        # self.positions = self.read_xyz("npt_final.xyz")
         # print(f"Initial positions loaded from file: {self.positions}")
         # Initialize velocities (m/s) randomly and adjust to desired temperature
         self.velocities, self.kinetic_energy = self.initialize_velocities()
@@ -273,8 +273,8 @@ class Simulation:
             self.kinetic_energy = 0.5 * self.mass * np.sum(self.velocities**2)
             self.total_energy = self.kinetic_energy + self.potential_energy
             self.update_pressure_tensor()
-
-            return self.kinetic_energy, self.potential_energy, self.total_energy, self.pressure_tensor[3:]
+            pressure = self.compute_pressure()
+            return self.kinetic_energy, self.potential_energy, self.total_energy, self.pressure_tensor[3:], pressure
 
     def read_xyz(self, filename):
         with open(filename, 'r') as f:
@@ -301,6 +301,12 @@ class Simulation:
             raise ValueError(f"XYZ file contains {len(positions)} atoms but simulation expects {self.n_particles}")
 
         return positions
+    def compute_pressure(self):
+        kinetic_pressure = (2.0 / (3.0 * self.volume)) * self.kinetic_energy
+        # Virial is sum of diagonal components
+        virial_trace = np.sum(self.virial_sum[:3])
+        virial_pressure = virial_trace / (3.0 * self.volume)
+        return kinetic_pressure + virial_pressure
     
     def simulate_LJ(self):
         """Run Lennard-Jones simulation collecting pressure tensor data."""
@@ -311,7 +317,7 @@ class Simulation:
         with open(self.pressure_file, "w") as pf:
             pf.write("# Step Time(s) Pxy(Pa) Pxz(Pa) Pyz(Pa)\n")
         with open(self.energy_file, "w") as ef:
-             ef.write("# Step Time(s) KE(J) PE(J) TotalE(J) Temp(K) Volume\n")
+             ef.write("# Step Time(s) KE(J) PE(J) TotalE(J) Temp(K) Volume Pressure\n")
       
         print("Starting simulation...")
         # Start tracking computational time
@@ -328,7 +334,7 @@ class Simulation:
         if self.use_npt:
             # Simulation loop
             for step in range(self.steps+1):
-                kinetic_energy, potential_energy, total_energy, pt_offdiag = self.npt_step()
+                kinetic_energy, potential_energy, total_energy, pt_offdiag, pressure = self.npt_step()
     
                 current_sim_time = step * self.dt
 
@@ -340,7 +346,7 @@ class Simulation:
                 if step % 100 == 0:
                      current_temp = kinetic_energy / (1.5 * self.n_particles * self.kb)
                      with open(self.energy_file, "a") as ef:
-                          ef.write(f"{step} {current_sim_time:.6e} {kinetic_energy:.6e} {potential_energy:.6e} {total_energy:.6e} {current_temp:.3f} {self.volume:.6e}\n")
+                          ef.write(f"{step} {current_sim_time:.6e} {kinetic_energy:.6e} {potential_energy:.6e} {total_energy:.6e} {current_temp:.3f} {self.volume:.6e} {pressure:.6e}\n")
 
                 # Save positions periodically
                 if step % 10 == 0:
