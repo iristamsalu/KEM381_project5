@@ -23,14 +23,14 @@ def unnormalized_autocorrelation(x):
 
 # --- Configuration & Constants ---
 DATA_FILE = 'pressure.dat' 
-VOLUME = 9.380892e-26      # Volume in m^3
+VOLUME = 3.779786e-23      # Volume in m^3
 KB = 1.380649e-23          # Boltzmann constant in J/K
-TEMPERATURE = 107.7        # Temperature in K
+TEMPERATURE = 223       # Temperature in K
 
 # Time limit for integration (in ps) - Choose based on SACF decay
 # Look at the SACF plot and choose a time after which it's mostly noise around zero.
 # Start with a value like 10-20 ps and adjust.
-INTEGRATION_TIME_PS = 50 
+INTEGRATION_TIME_PS = 400
 
 # --- Load Data ---
 if not os.path.exists(DATA_FILE):
@@ -111,7 +111,7 @@ if integration_steps >= len(eta_microPa_s):
 final_eta_microPa_s = eta_microPa_s[integration_steps]
 
 # Average over a plateau window for a more stable estimate
-plateau_start_ps = max(5.0, INTEGRATION_TIME_PS * 0.5) # Example: Start halfway to the limit, but at least 5ps
+plateau_start_ps = max(5.0, INTEGRATION_TIME_PS * 1/2) # Example: Start halfway to the limit, but at least 5ps
 plateau_end_ps = INTEGRATION_TIME_PS
 plateau_start_idx = int(plateau_start_ps * 1e-12 / dt_s)
 plateau_end_idx = integration_steps + 1 # Include the endpoint step
@@ -164,7 +164,6 @@ if plateau_start_idx < plateau_end_idx:
 else:
     plt.axhline(final_eta_microPa_s, color='g', linestyle=':', label=f'Value at Limit ({final_eta_microPa_s:.2f} μPa·s)')
 
-
 plt.xlabel('Integration Time Limit (ps)')
 plt.ylabel('Viscosity (μPa·s)')
 plt.title('Viscosity from Green-Kubo Integration')
@@ -173,3 +172,4 @@ plt.legend()
 plt.tight_layout()
 plt.savefig('viscosity_calculation.png')
 print("Plots saved to viscosity_calculation.png")
+

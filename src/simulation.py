@@ -32,24 +32,22 @@ class Simulation:
         self.nh_Q = c.nh_Q
         self.pr_W = c.pr_W
         self.zeta = 0.0
-        self.box_size = self.config.box_size
+        self.init_config = c.init_config
 
     def _initialize_simulation_state(self):
-        if self.use_npt:
-            self.positions = self.create_lattice()
+        self.volume = self.config.volume
+        self.box_size = self.config.box_size
+        self.num_density = self.config.num_density
+        self.density = self.config.density
+        if self.init_config is not None:
+            self.positions = self.read_xyz(self.init_config)
         else:
             self.positions = self.create_lattice()
-            # self.positions = self.read_xyz("npt_final.xyz")
-
         self.velocities, self.kinetic_energy = self.initialize_velocities()
         self.forces, self.potential_energy, self.virial_sum = compute_forces_virial(
             self.positions, self.config.box_size, self.rcutoff, self.sigma, self.epsilon
         )
         self.total_energy = self.kinetic_energy + self.potential_energy
-        self.volume = self.config.volume
-        self.box_size = self.config.box_size
-        self.num_density = self.config.num_density
-        self.density = self.config.density
 
     def _initialize_output_files(self):
         os.makedirs("output", exist_ok=True)
@@ -65,21 +63,17 @@ class Simulation:
     def read_xyz(self, filename):
         with open(filename, 'r') as f:
             lines = [line.strip() for line in f if line.strip()]
-        # Parse XYZ file
         n_atoms = int(lines[0])
         positions = []
-        for line in lines[2:2+n_atoms]:  # Skip first 2 lines (atom count and comment)
-            parts = line.split()
-            # Convert Angstroms to meters if needed (detect by typical values)
-            x, y, z = map(float, parts[1:4])
-            if max(abs(x), abs(y), abs(z)) > 10:  # Likely in Ångstroms
-                x, y, z = x*1e-10, y*1e-10, z*1e-10
-            positions.append([x, y, z])
-        positions = np.array(positions)
-        positions %= self.box_size 
-        # Verify atom count matches simulation
+        for line in lines[2:2+n_atoms]:
+            _, x, y, z = line.split()
+            positions.append([float(x), float(y), float(z)])
+        # Convert Å to meters
+        positions = np.array(positions) * 1e-10
+        # Apply periodic boundaries
+        positions %= self.box_size
         if len(positions) != self.n_particles:
-            raise ValueError(f"XYZ file contains {len(positions)} atoms but simulation expects {self.n_particles}")
+            raise ValueError(f"XYZ file contains {len(positions)} atoms but simulation expects {self.n_particles}.")
         return positions
 
     def create_lattice(self):
@@ -139,29 +133,28 @@ class Simulation:
         virial_pressure = virial_trace / (3.0 * self.volume)
         return kinetic_pressure + virial_pressure
 
-    def velocity_verlet_step(self):
-        """Perform one step of Velocity Verlet integration"""
+    def nve_nvt_step(self):
+        """Perform one step of Velocity Verlet integration in NVT ensemble"""
         # Half-step velocity update
         self.velocities += 0.5 * self.dt * self.forces / self.mass
         # Apply thermostat if selected
-        if not self.use_npt:
-            if self.use_langevin:
-                self.velocities = langevin_thermostat(
-                    velocities=self.velocities, 
-                    dt=self.dt, 
-                    temperature=self.temperature, 
-                    friction_coef=self.thermostat_constant,
-                    mass=self.mass, 
-                    kb=self.kb)
-            elif self.use_berendsen:
-                self.velocities = berendsen_thermostat(
-                    velocities=self.velocities, 
-                    dt=self.dt, 
-                    target_temperature=self.temperature, 
-                    tau=self.thermostat_constant,
-                    n_particles=self.n_particles, 
-                    mass=self.mass, 
-                    kb=self.kb)
+        if self.use_langevin:
+            self.velocities = langevin_thermostat(
+                velocities=self.velocities, 
+                dt=self.dt, 
+                temperature=self.temperature, 
+                friction_coef=self.thermostat_constant,
+                mass=self.mass, 
+                kb=self.kb)
+        elif self.use_berendsen:
+            self.velocities = berendsen_thermostat(
+                velocities=self.velocities, 
+                dt=self.dt, 
+                target_temperature=self.temperature, 
+                tau=self.thermostat_constant,
+                n_particles=self.n_particles, 
+                mass=self.mass, 
+                kb=self.kb)
         # Update positions
         temp_positions = self.positions + self.velocities * self.dt
         self.positions = self.apply_boundary_conditions(temp_positions) 
@@ -233,11 +226,8 @@ class Simulation:
     def minimize_energy_steepest_descent(self, max_steps=5000, force_tol=1e-6, step_size=0.01):
         print("\nStarting energy minimization (steepest descent)...")
         print(f"Convergence criterion: max force < {force_tol:.1e} N")
-
-        # Store original positions to avoid modifying self.positions directly
         minimized_positions = self.positions.copy()
         converged = False
-
         for n_steps in range(max_steps):
             # Compute forces and potential energy
             forces, potential_energy, _ = compute_forces_virial(
@@ -248,7 +238,7 @@ class Simulation:
             max_force = np.max(np.abs(forces))
             if max_force < force_tol:
                 converged = True
-                print(f"Converged after {n_steps} steps with max force = {max_force:.3e} N")
+                print(f"Converged after {n_steps} steps with max force = {max_force:.3e} N\n")
                 break
             # Steepest descent step: r_new = r_old + step_size * F/m (displace along forces)
             displacement = step_size * forces / self.mass
@@ -265,7 +255,6 @@ class Simulation:
                 minimized_positions -= displacement  # Revert step
             else:
                 step_size *= 1.05  # Slightly increase step size if energy decreased
-            # Print progress
             if n_steps % 100 == 0:
                 current_pressure = self.compute_pressure()
                 print(f"Min step {n_steps}: PE = {potential_energy:.3e} J, max F = {max_force:.3e} N, step size = {step_size:.3f}, pressure = {current_pressure:.3f}")
@@ -278,21 +267,17 @@ class Simulation:
         print("Starting simulation...")
         save_xyz(self.positions, self.trajectory_file, 0)
         start_time = time.time()
-
         if self.use_npt:
             minimized_positions = self.minimize_energy_steepest_descent()
             self.positions = minimized_positions
-
         for step in range(self.steps + 1):
             if self.use_npt:
                 ke, pe, te, pt_offdiag = self.npt_step()
             else:
-                ke, pe, te, pt_offdiag = self.velocity_verlet_step()
-
+                ke, pe, te, pt_offdiag = self.nve_nvt_step()
             t_sim = step * self.dt
             temp = ke / (1.5 * self.n_particles * self.kb)
             volume_str = f" {self.volume:.6e}" if self.use_npt else ""
-
             if step % 100 == 0:
                 with open(self.energy_file, "a") as ef:
                     ef.write(f"{step} {t_sim:.6e} {ke:.6e} {pe:.6e} {te:.6e} {temp:.3f}{volume_str}\n")
@@ -300,18 +285,20 @@ class Simulation:
                 save_xyz(self.positions, self.trajectory_file, step)
             with open(self.pressure_file, "a") as pf:
                 pf.write(f"{step} {t_sim:.6e} {pt_offdiag[0]:.6e} {pt_offdiag[1]:.6e} {pt_offdiag[2]:.6e}\n")
-            if step % 100 == 0:
+            if step % 1000 == 0:
                 current_pressure = self.compute_pressure()
-                print(f"Step: {step:6d} | Time: {t_sim:8.3e} s | Temp: {temp:7.2f} K | Pressure = {current_pressure:.3f} Pa | Pxy: {pt_offdiag[0]:.3e} Pa")
-            # Save the last frame to a seprate file npt_final.xyz
-            if step == self.steps and self.use_npt:
-                save_xyz(self.positions, self.npt_final, step)
-
+                print(f"Step: {step:6d} | Time: {t_sim:8.3e} s | Temp: {temp:7.2f} K | Pressure: {current_pressure:.3f} Pa | Volume: {self.volume:.6e} m3")
+            # Save the last frame to a seprate file
+            if step == self.steps:
+                if self.use_npt:
+                    save_xyz(self.positions, "npt_final.xyz", self.steps)
+                else:
+                    save_xyz(self.positions, "nvt_final.xyz", self.steps)
         elapsed = time.time() - start_time
         print("\nSimulation finished.")
         print(f"Total steps: {self.steps}, Total sim time: {self.steps * self.dt:.2e} s")
         print(f"Wall time: {elapsed:.2f} s")
         if self.use_npt:
-            print(f"Files saved: {self.trajectory_file}, {self.energy_file}, {self.pressure_file}, {self.npt_final}")
+            print(f"Files saved: {self.trajectory_file}, {self.energy_file}, {self.pressure_file}, npt_final.xyz")
         else:
-            print(f"Files saved: {self.trajectory_file}, {self.energy_file}, {self.pressure_file}")
+            print(f"Files saved: {self.trajectory_file}, {self.energy_file}, {self.pressure_file}, nvt_final.xyz")

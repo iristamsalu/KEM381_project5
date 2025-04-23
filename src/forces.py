@@ -30,7 +30,6 @@ def compute_lj_potential(r, sigma, epsilon, rcutoff):
     # returns shifted potential in J
     return potential - shift
 
-
 @jit(nopython=True)
 def build_linked_cells(positions, box_size, rcutoff):
     """
