@@ -74,61 +74,14 @@ def parrinello_rahman_barostat(
     Returns:
         updated_positions, updated_velocities, new_box_size, new_eta
     """
-    # 1. Barostat velocity half-step update
+    # Barostat velocity half-step update
     volume = box_size ** 3
     eta += 0.5 * dt * (volume / W) * (inst_pressure - pressure)
     
-    # 2. Scale box and positions (full step: L = L * exp(eta*dt))
+    # Scale box and positions (full step: L = L * exp(eta*dt))
     scale = np.exp(dt * eta)
     new_box_size = box_size * scale
     updated_positions = positions * scale
     updated_velocities = velocities * scale  # velocities scale as positions
     
     return updated_positions, updated_velocities, new_box_size, eta
-    
-# def parrinello_rahman_barostat(positions, velocities, forces, dt, pressure, W, box_size, mass, virial_sum=None):
-#     """
-#     Optimized Parrinello-Rahman barostat for constant pressure simulations.
-#     """
-#     # Precompute values used multiple times
-#     volume = box_size ** 3
-#     inv_volume = 1.0 / volume
-#     inv_box_size = 1.0 / box_size
-#     dt_squared = dt ** 2
-
-#     # Calculate kinetic contribution to pressure
-#     # Use in-place operations where possible
-#     kin_sum = np.sum(velocities * velocities)  # Faster than velocities**2
-#     kinetic_pressure = mass * kin_sum * inv_volume / 3.0
-
-#     # Calculate virial contribution to pressure
-#     if virial_sum is None:
-#         # Vectorized dot product
-#         virial_sum = np.sum(positions * forces)
-#     virial_pressure = -virial_sum * inv_volume / 3.0
-
-#     # Total instantaneous pressure
-#     inst_pressure = kinetic_pressure + virial_pressure
-
-#     # Pressure difference and box acceleration
-#     pressure_diff = inst_pressure - pressure
-#     box_accel = volume * pressure_diff / W
-
-#     # Calculate scaling factor (avoiding division when possible)
-#     scaling_factor = 1.0 - (dt_squared * box_accel * inv_box_size) / 3.0
-
-#     # Limit scaling (np.clip is more efficient than min/max)
-#     #scaling_factor = np.clip(scaling_factor, 0.95, 1.05)
-
-#     # Update box size (cbrt is computationally expensive, use power of 1/3)
-#     new_box_size = box_size * scaling_factor**(1.0/3.0)
-#     #new_box_size = max(new_box_size, box_size * 0.5)
-
-#     # Calculate scale ratio once
-#     scale_ratio = new_box_size * inv_box_size
-
-#     # Scale positions and velocities (in-place multiplication is faster)
-#     updated_positions = positions * scale_ratio
-#     updated_velocities = velocities * scale_ratio
-
-#     return updated_positions, updated_velocities, new_box_size, scale_ratio
