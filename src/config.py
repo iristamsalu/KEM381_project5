@@ -16,7 +16,7 @@ DEFAULT_RCUTOFF = 2.5 * ARGON_SIGMA
 DEFAULT_BERENDSEN_TAU = 0.5e-12 # s
 DEFAULT_TARGET_PRESSURE = 0.1628e6  # pressure for NPT ensemble, Pa
 DEFAULT_NH_Q = 4e-24  # Default Nose-Hoover coupling constant for NPT
-DEFAULT_PR_W = 5e-28  # Default Parrinello-Rahman coupling constant for NPT
+DEFAULT_PR_W = 5e-40  # Default Parrinello-Rahman coupling constant for NPT
 
 @dataclass
 class Configuration:
@@ -50,7 +50,6 @@ class Configuration:
             self.num_density = self.density / self.mass
             self.volume = self.n_particles / self.num_density
         else:
-            self.n_particles = round(self.density * self.volume / self.mass)
             self.num_density = self.n_particles / self.volume
 
         self.box_size = self.volume ** (1 / 3)
@@ -68,7 +67,7 @@ def parse_args():
 
     parser.add_argument("--steps", type=int, default=20000, help="Number of simulation steps")
     parser.add_argument("--dt", type=float, default=DEFAULT_TIMESTEP, help="Timestep in seconds")
-    parser.add_argument("--n_particles", type=int, default=2000, help="Number of particles")
+    parser.add_argument("--n_particles", type=int, default=1024, help="Number of particles")
     parser.add_argument("--temperature", type=float, default=DEFAULT_TEMP_K, help="Temperature in K")
     parser.add_argument("--density", type=float, default=DEFAULT_DENSITY, help="Mass density in kg/m3")
     parser.add_argument("--sigma", type=float, default=ARGON_SIGMA, help="Lennard-Jones sigma (m)")
