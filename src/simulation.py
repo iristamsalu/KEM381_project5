@@ -32,6 +32,7 @@ class Simulation:
         self.nh_Q = c.nh_Q
         self.pr_W = c.pr_W
         self.zeta = 0.0
+        self.eta = 0.0
         self.init_config = c.init_config
 
     def _initialize_simulation_state(self):
@@ -170,57 +171,41 @@ class Simulation:
         self.update_pressure_tensor() 
         # Return KE, PE, Total E (all in J), and off-diagonal PT (Pa)
         return self.kinetic_energy, self.potential_energy, self.total_energy, self.pressure_tensor[3:]
-
+      
     def npt_step(self):
         """Perform one step of NPT integration using Nosé-Hoover and Parrinello-Rahman"""
         # Half-step velocity update
         self.velocities += 0.5 * self.dt * self.forces / self.mass
         # Apply Nose-Hoover thermostat
-        if self.use_npt:
-            self.velocities, self.zeta = nose_hoover_thermostat(
-                velocities=self.velocities,
-                dt=self.dt,
-                temperature=self.temperature,
-                kb=self.kb,
-                mass=self.mass,
-                Q=self.nh_Q,
-                zeta=self.zeta
-            )
+        self.velocities, self.zeta = nose_hoover_thermostat(
+            velocities=self.velocities, dt=self.dt, temperature=self.temperature,
+            kb=self.kb, mass=self.mass, Q=self.nh_Q, zeta=self.zeta)
+        
         # Update positions
         temp_positions = self.positions + self.velocities * self.dt
+        # Calculate current pressure
+        current_pressure = self.compute_pressure()
         # Apply Parrinello-Rahman barostat
-        if self.use_npt:
-            (temp_positions, 
-            self.velocities, 
-            self.box_size, 
-            scaling_factor) = parrinello_rahman_barostat(
-                positions=temp_positions,
-                velocities=self.velocities,
-                forces=self.forces,
-                dt=self.dt,
-                pressure=self.target_pressure,
-                W=self.pr_W,
-                box_size=self.box_size,
-                mass=self.mass  # Add this parameter
-            )
-            # Update system properties that depend on box size
-            self.volume = self.box_size**3
-            self.num_density = self.n_particles / self.volume
-            self.density = self.num_density * self.mass
+        temp_positions, self.velocities, self.box_size, self.eta = parrinello_rahman_barostat(
+            positions=temp_positions, velocities=self.velocities, forces=self.forces, dt=self.dt, 
+            pressure=self.target_pressure, W=self.pr_W, box_size=self.box_size, mass=self.mass,
+            inst_pressure=current_pressure, eta=self.eta)
 
-            self.positions = self.apply_boundary_conditions(temp_positions)
+        # Update system properties that depend on box size
+        self.volume = self.box_size**3
+        self.num_density = self.n_particles / self.volume
+        self.density = self.num_density * self.mass
+        self.positions = self.apply_boundary_conditions(temp_positions)
 
-            # Compute new forces
-            self.forces, self.potential_energy, self.virial_sum = compute_forces_virial(
-                self.positions, self.box_size, self.rcutoff,
-                self.sigma, self.epsilon)
-            # 2nd half-step velocity update
-            self.velocities += 0.5 * self.dt * self.forces / self.mass
-            # Compute energies and pressure
-            self.kinetic_energy = 0.5 * self.mass * np.sum(self.velocities**2)
-            self.total_energy = self.kinetic_energy + self.potential_energy
-            self.update_pressure_tensor()
-            return self.kinetic_energy, self.potential_energy, self.total_energy, self.pressure_tensor[3:]
+        # Compute new forces
+        self.forces, self.potential_energy, self.virial_sum = compute_forces_virial(
+            self.positions, self.box_size, self.rcutoff, self.sigma, self.epsilon)
+        # 2nd half-step velocity update
+        self.velocities += 0.5 * self.dt * self.forces / self.mass
+        self.kinetic_energy = 0.5 * self.mass * np.sum(self.velocities**2)
+        self.total_energy = self.kinetic_energy + self.potential_energy
+        self.update_pressure_tensor()
+        return self.kinetic_energy, self.potential_energy, self.total_energy, self.pressure_tensor[3:]
 
 
     def minimize_energy_steepest_descent(self, max_steps=5000, force_tol=1e-6, step_size=0.01):
