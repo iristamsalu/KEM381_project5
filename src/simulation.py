@@ -171,7 +171,7 @@ class Simulation:
         # Return KE, PE, Total E (all in J), and off-diagonal PT (Pa)
         return self.kinetic_energy, self.potential_energy, self.total_energy, self.pressure_tensor[3:]
 
-    def npt_step(self):
+   def npt_step(self):
         """Perform one step of NPT integration using Nosé-Hoover and Parrinello-Rahman"""
         # Half-step velocity update
         self.velocities += 0.5 * self.dt * self.forces / self.mass
@@ -220,7 +220,7 @@ class Simulation:
             self.kinetic_energy = 0.5 * self.mass * np.sum(self.velocities**2)
             self.total_energy = self.kinetic_energy + self.potential_energy
             self.update_pressure_tensor()
-            return self.kinetic_energy, self.potential_energy, self.total_energy, self.pressure_tensor[3:]
+            return self.kinetic_energy, self.potential_energy, self.total_energy, self.pressure_tensor[3:] 
 
 
     def minimize_energy_steepest_descent(self, max_steps=5000, force_tol=1e-6, step_size=0.01):
