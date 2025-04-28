@@ -1,197 +1,126 @@
 # KEM381
-## Project Assignment 4
+## Project Assignment 5
 
 ### Overview
-This is a simple Lennard-Jones MD model in 2D and 3D. It is implemented as a molecular dynamics simulation where you can use different boundary conditions, computational algorithms, Langevin and Berendsen thermostats and change system parameters. Also, computational time, energies and trajectory are tracked during the simulation. Additionally, it has two separate programs that calculate radial distribution function (RDF) and diffusion coefficient. The project offers two main functionalities:
-
-1. It simulates particles under the influence of the **Lennard-Jones Potential** using **Velocity Verlet** algorithm.
-
-2. **Energy Minimization** involves finding the configuration of particles that minimizes the potential energy of the system by optimizing particle positions.
-
-In addition to MD, we also developed a Monte Carlo (MC) simulation. In the program various analyses are performed alongside the MC run, including Mean Squared Displacement (MSD), RDF, final particle configurations, energy profiles, autocorrelation analysis, and displacement histograms.
+This is a simple Lennard-Jones (LJ) molecular dynamics (MD) model for Argon. The simulation can be run as NVE, NVT or NPT ensemble. NB! NPT is not properly tested. In addition, the user can visualize phase behaviour with radial distribution function (RDF) or calculate viscosity with Green-Kubo method.
 
 ### Files
-- **main.py**: Main execution script that parses arguments, initializes the simulation, chooses between algorithms, and runs either energy minimization or full Lennard-Jones simulation.
-- **simulation.py**: Core of the simulation logic. Handles initialization, Velocity Verlet integration, energy minimization, boundary conditions, force calculations, lattice setup, and velocity initialization. Provides simulate_LJ() for full dynamics and minimize_energy() for energy minimization.
-- **thermostats.py**: Contains two thermostat functions: Langevin and Berendsen.
-- **forces.py**: Implements Lennard-Jones force and potential calculations using both the basic pairwise method and the optimized LCA for efficient neighbor searching.
-- **forces_jit.py**: Has same functions as forces.py but uses just-in-time compilation.
-- **config.py**: Parses and validates command-line arguments, and stores simulation parameters in a structured Configuration dataclass.
-- **output_and_plots.py**: Handles visualization and trajectory saving.
-- **RDF.py**: Computes and plots RDF
-- **diffusion_coeffcient.py**: Computes diffusion coefficient from positions MSD vs. simulation time and MSD vs. computer time plots.
-- **monte_carlo.py**: Monte Carlo simulation with various plots, including MSD, RDF, final positions, energy, correlation analysis and displacement histogram.
+- **main.py**: Main execution script that parses arguments, initializes the simulation, and runs the LJ simulation.
+- **simulation.py**: Core of the simulation logic. Manages system initialization, lattice setup, velocity initialization, force and virial calculations, pressure tensor computation, energy tracking, Velocity Verlet integration, thermostat and barostat control, periodic boundary conditions, energy minimization, and XYZ trajectory/output file saving.
+- **thermostats.py**: Contains three thermostat functions: Langevin, Berendsen and Nose-Hoover, and Parrinello-Rahman barostat.
+- **forces.py**: Implements Lennard-Jones force and potential calculations using linked cell algorithm (LCA).
+- **config.py**: Parses and validates command-line arguments, defines Lennard-Jones parameters for argon (σ, ε, mass), and stores all simulation settings in a structured Configuration dataclass.
+- **rdf.py**: Computes and plots RDF.
+- **green_kubo.py**: Calculates viscosity with Green-Kubo method.
 - **requirements.txt**: A list of packages and libraries needed to run the programs.
 
 
 ### Installing Requirements
 To install the necessary requirements in a virtual environment, use the following command:
+```
 pip3 install -r requirements.txt
+```
 
 ### Running the Main MD Program
-To run the MD simulation program, you need to provide certain parameters through the command line.
+To run the Argon MD simulation program, you need to provide certain parameters through the command line.
 
 #### Explanation of Arguments:
 
-- `--dimensions <2 or 3>`: Set simulation to 2D or 3D (default: 2)
-- `--steps <number_of_steps>`: The number of steps to run the simulation (default: 5000)
-- `--dt <time_step>`: The time step used in the simulation (default: 0.0001)
-- `--density <density>`: The particle density in the system (default: 0.8)
-- `--n_particles <number_of_particles>`: The number of particles in the simulation (default: 100)
-- `--use_pbc`: (Optional) Flag to enable **Periodic Boundary Conditions**. If omitted, **hard wall** boundary conditions are used by default (default: False)
-- `--sigma <LJ_sigma>`: (Optional) The Lennard-Jones sigma parameter (distance where the potential is zero) (default: 1)
-- `--epsilon <LJ_epsilon>`: (Optional) The Lennard-Jones epsilon parameter (depth of the potential well) (default: 1)
-- `--rcutoff <LJ_cutoff_radius>`: (Optional) The cutoff radius for the Lennard-Jones potential (default: 2.5)
-- `--minimize`: (Optional) Flag to run **energy minimization** from random particle positions. If omitted, the regular **Lennard-Jones simulation** will be run by default (default: False)
-- `--minimize_only`: (Optional) Flag to run **energy minimization** from initial lattice. If omitted, the regular **Lennard-Jones simulation** will be run by default (default: False)
-- `--minimization_steps`: (Optional) Give only when running with `--minimize` or `--minimize_only` (default: 10000)
-- `--use_lca`: (Optional) Flag to run the LJ simulation or minimization using the **linked cell algorithm**. If omitted, the basic pairwise method will be used by default (default: False)
-- `--use_jit`: (Optional) Flag to run the LJ simulation or minimization using the **just-in-time compilation (JIT)** (default: False)
-- `--temperature <temperature>`: (Optional) The temperature in reduced units (default: 0.5)
-- `--use_langevin`: (Optional) Flag to use **Langevin thermostat** (default: False)
-- `--use_berendsen`: (Optional) Flag to use **Berendsen thermostat** (default: False)
-- `--thermostat_constant`: (Optional) Specify thermostat parameter; for Langevin: friction coefficient zeta; for Berendsen: relaxation time tau (default: 1)
+- `--steps <number_of_steps>`: Number of simulation steps (default: 20000).
+- `--dt <time_step>`: Time step size in seconds (default: 2e-15 s).
+- `--n_particles <number_of_particles>`: Number of particles in the simulation box (default: 1024).
+- `--temperature <temperature>`: Simulation temperature in Kelvin (default: 173 K).
+- `--density <density>`: Mass density in kg/m³ (default: 844.53 kg/m³).
+- `--sigma <LJ_sigma>`: Lennard-Jones sigma parameter (default: 3.40e-10 m, for Argon).
+- `--epsilon <LJ_epsilon>`: Lennard-Jones epsilon parameter (default: 1.65678e-21 J, for Argon).
+- `--mass` <particle_mass>: Particle mass in kilograms (default: 6.6335e-26 kg, for Argon).
+- `--rcutoff <LJ_cutoff_radius>`: Cutoff radius for Lennard-Jones potential (default: 2.5 × sigma).
+- `--use_langevin`: (Optional) Apply Langevin thermostat for temperature control (mutually exclusive with --use_berendsen).
+- `--use_berendsen`: (Optional) Apply Berendsen thermostat for temperature control (mutually exclusive with --use_langevin).
+- `--thermostat_constant`: Thermostat parameter (friction coefficient for Langevin, relaxation time for Berendsen). If not specified, a default is calculated based on particle mass.
+- `--npt`: (Optional) Run simulation in NPT ensemble (requires pressure coupling).
+- `--nvt`: (Optional) Run simulation in NVT ensemble (temperature controlled, volume fixed).
+- `--nve`: (Optional) Run simulation in NVE ensemble (no thermostat/barostat; energy conserving).
+- `--volume` <initial_volume>: (Optional) Manually specify box volume (in m³); otherwise computed from density.
+- `--init_config` <file.xyz>: (Optional) Start from an existing XYZ file with particle coordinates.
+- `--target_pressure` <pressure>: Target pressure for NPT ensemble, in Pascals (default: 16.1789 MPa).
+- `--nh_Q` <Nose_Hoover_Q>: Coupling constant for Nose-Hoover barostat (default: 4e-4).
+- `--pr_W` <Parrinello_Rahman_W>: Coupling constant for Parrinello-Rahman barostat (default: 1e-20).
+
 
 #### Example Commands:
-- **Example 1: NVE With Periodic Boundary Conditions (PBC)**:
+- **Example 1: NVE**:
     ```
-    python3 main.py --dimensions <2 or 3> --steps <number_of_steps> --dt <time_step> --density <density> --n_particles <number_of_particles>
-
-    python3 main.py --dimensions 2 --steps 10000 --dt 0.0001 --density 0.8 --n_particles 20 --use_pbc --use_lca --use_jit 
+    python main.py --nve --temperature 223 --density 3.51
 
     ```
 
-- **Example 2: Minimize energy starting from initial lattice**:
+- **Example 2: NVT**:
     ```
-    python3 main.py --dimensions <2 or 3> --dt <time_step> --density <density> --n_particles <number_of_particles> --minimize_only --minimization_steps <number_of_steps>
-
-    python3 main.py --dimensions 2 --dt 0.0001 --density 0.8 --n_particles 20 --minimize_only --minimization_steps 10000 --use_lca --use_jit
+    python main.py --nvt --temperature 223 --use_langevin --density 3.51
 
     ```
 
-- **Example 3: Minimize energy running NVE simulation with PBC before minimization**:
+- **Example 3: NPT**:
     ```
-    python3 main.py --dimensions <2 or 3> --steps <number_of_steps_before_minimization> --dt <time_step> --density <density> --n_particles <number_of_particles> --use_pbc --minimize --minimization_steps <number_of_minimization_steps>
-
-    python3 main.py --dimensions 3 --steps 10000 --dt 0.0001 --density 0.8 --n_particles 100 --minimize --minimization_steps 10000 --use_lca --use_jit
+    python main.py --npt --temperature 223 --density 3.51 --target_pressure 0.1628e6
 
     ```
 
-- **Example 4: Run MD simulation with Langevin thermostat and PBC**:
+- **Example 4: NPT-NVT-NVE**:
     ```
-    python3 main.py --dimensions <2 or 3> --steps <number_of_steps_before_minimization> --dt <time_step> --density <density> --n_particles <number_of_particles> --use_pbc --use_langevin --temperature <desired temperature> --thermostat_constant <langevin zeta> --use_lca --use_jit
-
-    python3 main.py --dimensions 3 --steps 10000 --dt 0.01 --density 0.8 --n_particles 100 --use_pbc --use_langevin --temperature 0.5 --thermostat_constant 1 --use_lca --use_jit
-
-    ```
-
-- **Example 5: Run MD simulation with Berendsen thermostat and PBC**:
-    ```
-    python3 main.py --dimensions <2 or 3> --steps <number_of_steps_before_minimization> --dt <time_step> --density <density> --n_particles <number_of_particles> --use_pbc --use_berendsen --temperature <desired temperature> --thermostat_constant <berendsen tau> --use_lca --use_jit
-
-    python3 main.py --dimensions 3 --steps 10000 --dt 0.01 --density 0.8 --n_particles 100 --use_pbc --use_berendsen --temperature 0.7 --thermostat_constant 1 --use_lca --use_jit
-
+    python main.py --npt --temperature 223 --density 3.51 --target_pressure 0.1628e6
+    python main.py --nvt --temperature 223 --use_langevin --density 3.51 --init_config ./output/npt_final.xyz --volume 1.935487e-23
+    python main.py --nve --temperature 223 --density 3.51 --init_config ./output/nvt_final.xyz --volume 1.935487e-23
     ```
 
 #### MD simulation output:
 1. Program creates output folder and several output files.
-2. Trajectory is saved to an `.xyz` file which can be visualized using tools like VMD or Ovito.
-3. The energy evaluation plot is saved as `energy_plot.png`. Detailed energy values during the simulation are stored in `energy_data.dat`.
-4. Run history including run parameters and computational times is saved to `run_history.dat`.
+2. Trajectory is saved to `trajectory.xyz` file which can be visualized using tools like VMD or Ovito.
+3. Detailed energy values during the simulation are stored in `energy.dat`. It also tracks temperature and volume.
+4. Pressure component (Pxy, Pxz, Pyz) for green_kubo.py are saved to `pressure.dat`.
+5. NPT and NVT final frames are saved to `npt_final.xyz` and `nvt_final.xyz`.
 
 ---
 
-### Running RDF.py
+### Running rdf.py
 To calculate RDF you need to have a `.XYZ` file of a trajectory.
 
 #### Explanation of Arguments:
 
 - `<filename>`: (required) XYZ file that you want to use or path to the input XYZ file
-- `--density <density>`: (required) The particle density in the system
-- `--dim <2 or 3>`: (required) Is the XYZ in 2D or 3D
-- `--start <starting frame for RDF calculations>`: (optional) Give a starting frame if you want to skip some of the inital frames (default: 0)
+- `--density <density>`: (required) Mass density in kg/m³
+- `--start <starting frame for RDF calculations>`: (optional) Give a starting frame if you want to skip some of the initial frames (default: 0)
 - `--bins <nr of histogram bins>`: (optional) Number of RDF histogram bins for resolution (default: 100)
 
-#### Example Commands:
-- **Example 1: Compute RDF for a simulation trajectory in ./output/2D_trajectory.xyz**:
+#### Example Command:
+- **Example: Compute RDF for a simulation trajectory**:
     ```
-    python3 RDF.py <path to the XYZ file> --density <density> --dim <2 or 3> --start <starting frame nr> --bins <nr of histogram bins>
-
-    python3 RDF.py ./output/2D_trajectory.xyz --density 0.5 --dim 2 --start 5000 --bins 50
+    python rdf.py ./output/trajectory.xyz --density 844.53 --start 100 --bins 100
 
     ```
 
-
-#### RDF.py output:
-1. Program creates a rdf_plot.png file in the output folder.
+#### rdf.py output:
+1. Program creates a rdf_plot.png file into the output folder.
 
 ---
 
-### Running diffusion_coef.py
-To compute diffusion coeffcient by plotting MSD vs. simulation time and MSD vs. computer time.
+### Running green_kubo.py
+To calculate viscosity you need to have `pressure.dat` file. NB! green_kubo.py does not accept command-line arguments; you must edit variable values directly in the script.
 
-#### Explanation of Arguments:
-
-- `<filename>`: (required) path to the input XYZ file
-- `--dt_sim <simulation timestep length>`: (required) Simulation timestep length
-- `--dt_comp <timestep length in seconds>`: (required) Computer timestep length in seconds, you can find it from run_history.dat
-- `--box_size <length of a box>`: (required) Give box side length, in 2D (nr_of_particles / density) ** (1 / 2), in 3D (nr_of_particles / density) ** (1 / 3)
-- `--dim <2 or 3>`: (required) Is the XYZ in 2D or 3D
-- `--start <starting frame>`: (optional) Give a starting frame if you want to skip some of the inital frames (default: 0)
-- `--skip <skip interval>`: (optional) Use it to skip some frames (default: 1), which means all the frames are used
-
-#### Example Commands:
-- **Example 1: Compute diffusion coefficient for a simulation trajectory in ./output/2D_trajectory.xyz**:
-    ```
-    python3 diffusion_coef.py <path to the XYZ file> --density <density> --dim <2 or 3> --start <starting frame nr> --bins <nr of histogram bins>
-
-    python3 diffusion_coef.py ./output/2D_trajectory.xyz --dt_sim 0.01 --dt_comp 0.0256 --box_size 20 --dim 2
-
-    ```
-
-#### Output from diffusion_coef.py:
-1. Program creates a `msd_plot_{filename}.png` file in the output folder.
-
-
----
-### Running MC simulation monte_carlo.py
-
-#### Explanation of Arguments:
-
-- `--dimension <2 or 3>`: Run in 2D or 3D (default: 2)
-- `--particles <number of particles>`: Number of particles (default: 500)
-- `--density <number density>`: Number density (default: 0.94)
-- `--temperature <temperature in reduced units>`: Give temperature value in reduced units (default: 1.52)
-- `--steps <nr of steps>`: Give the nr of simulation steps (default: 1000000)
-- `--max_displacement <max displacement>`: Give the maximum displacement value (default: 0.08)
-- `--cutoff <cutoff>`: Cutoff in the units of sigma (default: 2.5)
-- `--seed <random seed>`: A random seed for reproducibility (default: 16)
-- `--sigma <sigma>`: Lennard-Jones sigma (default: 1.0)
-- `--epsilon <epsilon>`: Lennard-Jones epsilon (default: 1.0)
+#### Explanation of Important Arguments:
+- `DATA_FILE`: `./output/pressure.dat` or another file with similar content
+- `VOLUME`: box volume in m^3
+- `TEMPERATURE`: temperature in Kelvins
+- `INTEGRATION_START_PS` - adjust to change the integration interval
+- `INTEGRATION_END_PS` - adjust to change the integration interval
 
 #### Example Command:
-- **Example:
+- **Example: After adjusting the variables in green_kubo.py**:
     ```
-    python3 monte_carlo.py --dimension <2 or 3> --particles <nr of particles> --density <number density> --temperature <reduced temperature> --steps <nr of steps> 
-
-    python3 monte_carlo.py --dimension 2 --particles 100 --density 0.5 --temperature 1.5 --steps 100000 
+    python green_kubo.py
 
     ```
 
-#### Generated files in the output folder:
-All the MC files have _MC tag in the file name to distinguish them from MD files.
-1. `correlation_analysis_MC.png`
-2. `displacement_hist_MC.png`
-3. `energy_evolution_MC.png`
-4. `final_positions_2d_MC.png`
-5. `msd_MC.png`
-6. `rdf_MC.png`
-
-
----
-
-### Notes:
-The `videos/` folder contains OVITO visuals (`.mp4` files) for different phases: `gas.mp4`, `liquid.mp4`, `hexatic.mp4` and `solid.mp4`.
-
----
-
+#### green_kubo.py output:
+1. Program creates a viscosity_plot.png file into the output folder.
