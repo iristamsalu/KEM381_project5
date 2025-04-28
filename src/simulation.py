@@ -2,7 +2,6 @@ import numpy as np
 import time
 import os
 from config import Configuration
-from output_and_plots import save_xyz
 from forces import compute_forces_virial
 from thermostats import langevin_thermostat, berendsen_thermostat, nose_hoover_thermostat, parrinello_rahman_barostat
 
@@ -28,6 +27,8 @@ class Simulation:
         self.use_berendsen = c.use_berendsen
         self.thermostat_constant = c.thermostat_constant
         self.use_npt = c.use_npt
+        self.use_nvt = c.use_nvt
+        self.use_nve = c.use_nve
         self.target_pressure = c.target_pressure
         self.nh_Q = c.nh_Q
         self.pr_W = c.pr_W
@@ -60,6 +61,12 @@ class Simulation:
             ef.write("# Step Time(s) KE(J) PE(J) TotalE(J) Temp(K) Volume\n")
         if self.use_npt:
             self.npt_final = os.path.join("output", "npt_final.xyz")
+            with open(self.npt_final, "w"):
+                pass
+        if self.use_nvt:
+            self.nvt_final = os.path.join("output", "nvt_final.xyz")
+            with open(self.nvt_final, "w"):
+                pass
 
     def read_xyz(self, filename):
         with open(filename, 'r') as f:
@@ -76,6 +83,30 @@ class Simulation:
         if len(positions) != self.n_particles:
             raise ValueError(f"XYZ file contains {len(positions)} atoms but simulation expects {self.n_particles}.")
         return positions
+
+    def save_xyz(self, filename, step):
+        """
+        Append particle positions to an XYZ file.
+        Converts positions from meters to Angstroms for visualization.
+        
+        Args:
+            positions (np.ndarray): Array of particle positions (N, 3) in meters.
+            filename (str): Path to the XYZ file.
+            step (int): Current simulation step number.
+        """
+        try:
+            with open(filename, "a") as f:
+                f.write(f"{len(self.positions)}\n")
+                # Comment line can include step number
+                f.write(f"Step: {step}\n") 
+                for pos in self.positions:
+                    # Convert meters to Angstroms
+                    pos_A = pos * 1e10 
+                    f.write(f"Ar {pos_A[0]:12.6f} {pos_A[1]:12.6f} {pos_A[2]:12.6f}\n")
+        except IOError as e:
+            print(f"Error writing to xyz file {filename}: {e}")
+        except Exception as e:
+            print(f"An unexpected error occurred in save_xyz: {e}")
 
     def create_lattice(self):
         """Create a 3D simple cubic lattice with slight random displacements."""
@@ -250,7 +281,7 @@ class Simulation:
 
     def simulate_LJ(self):
         print("Starting simulation...")
-        save_xyz(self.positions, self.trajectory_file, 0)
+        self.save_xyz(self.trajectory_file, step=0)
         start_time = time.time()
         if self.use_npt:
             minimized_positions = self.minimize_energy_steepest_descent()
@@ -267,7 +298,7 @@ class Simulation:
                 with open(self.energy_file, "a") as ef:
                     ef.write(f"{step} {t_sim:.6e} {ke:.6e} {pe:.6e} {te:.6e} {temp:.3f}{volume_str}\n")
             if step % 10 == 0:
-                save_xyz(self.positions, self.trajectory_file, step)
+                self.save_xyz(self.trajectory_file, step)
             with open(self.pressure_file, "a") as pf:
                 pf.write(f"{step} {t_sim:.6e} {pt_offdiag[0]:.6e} {pt_offdiag[1]:.6e} {pt_offdiag[2]:.6e}\n")
             if step % 1000 == 0:
@@ -276,14 +307,16 @@ class Simulation:
             # Save the last frame to a seprate file
             if step == self.steps:
                 if self.use_npt:
-                    save_xyz(self.positions, "npt_final.xyz", self.steps)
-                else:
-                    save_xyz(self.positions, "nvt_final.xyz", self.steps)
+                    self.save_xyz(self.npt_final, step)
+                if self.use_nvt:
+                    self.save_xyz(self.nvt_final, step)
         elapsed = time.time() - start_time
         print("\nSimulation finished.")
         print(f"Total steps: {self.steps}, Total sim time: {self.steps * self.dt:.2e} s")
         print(f"Wall time: {elapsed:.2f} s")
         if self.use_npt:
-            print(f"Files saved: {self.trajectory_file}, {self.energy_file}, {self.pressure_file}, npt_final.xyz")
-        else:
-            print(f"Files saved: {self.trajectory_file}, {self.energy_file}, {self.pressure_file}, nvt_final.xyz")
+            print(f"Files saved: {self.trajectory_file}, {self.energy_file}, {self.pressure_file}, {self.npt_final}")
+        if self.use_nvt:
+            print(f"Files saved: {self.trajectory_file}, {self.energy_file}, {self.pressure_file}, {self.nvt_final}")
+        if self.use_nve:
+            print(f"Files saved: {self.trajectory_file}, {self.energy_file}, {self.pressure_file}")

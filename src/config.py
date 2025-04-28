@@ -4,19 +4,19 @@ import os
 from dataclasses import dataclass, field
 
 # Physical constants and defaults
-ARGON_SIGMA = 3.405e-10  # meters
-ARGON_EPSILON_KB = 119.8  # K
+ARGON_SIGMA = 3.40e-10  # meters
+ARGON_EPSILON_KB = 120.0 # K
 BOLTZMANN_CONSTANT = 1.380649e-23  # J/K
 ARGON_EPSILON = ARGON_EPSILON_KB * BOLTZMANN_CONSTANT
 ARGON_MASS_KG = 39.948 * 1.66054e-27  # kg
-DEFAULT_TEMP_K = 223
+DEFAULT_TEMP_K = 223 # K
 DEFAULT_DENSITY = 3.51  # kg/m3
 DEFAULT_TIMESTEP = 2e-15  # s
 DEFAULT_RCUTOFF = 2.5 * ARGON_SIGMA
 DEFAULT_BERENDSEN_TAU = 0.5e-12 # s
 DEFAULT_TARGET_PRESSURE = 0.1628e6  # pressure for NPT ensemble, Pa
 DEFAULT_NH_Q = 4e-24  # Default Nose-Hoover coupling constant for NPT
-DEFAULT_PR_W = 5e-40  # Default Parrinello-Rahman coupling constant for NPT
+DEFAULT_PR_W = 4e-38  # Default Parrinello-Rahman coupling constant for NPT
 
 @dataclass
 class Configuration:
@@ -37,7 +37,7 @@ class Configuration:
     target_pressure: float
     nh_Q: float
     pr_W: float
-    volume: float = None
+    volume: float
     init_config: str = None
     mass: float = ARGON_MASS_KG
     kb: float = BOLTZMANN_CONSTANT
@@ -46,7 +46,7 @@ class Configuration:
     box_size: float = field(init=False)
 
     def __post_init__(self):
-        if self.use_npt:
+        if self.volume is None:
             self.num_density = self.density / self.mass
             self.volume = self.n_particles / self.num_density
         else:
@@ -93,11 +93,22 @@ def parse_args():
     if not args.npt and not args.nvt and not args.nve:
         print("Info: No ensemble specified. Defaulting to NVE (no thermostat, no barostat).")
         args.nve = True
+
+    # If user picked NVT but no thermostat, default to Langevin
+    if args.nvt and not (args.use_langevin or args.use_berendsen):
+        print("Info: NVT selected but no thermostat chosen. Defaulting to Langevin thermostat.")
+        args.use_langevin = True
+    if args.thermostat_constant is None:
+        args.thermostat_constant = args.mass / DEFAULT_BERENDSEN_TAU
+
     if args.thermostat_constant is None:
         if args.use_langevin:
             args.thermostat_constant = args.mass / DEFAULT_BERENDSEN_TAU
+            print(args.thermostat_constant)
         elif args.use_berendsen:
             args.thermostat_constant = DEFAULT_BERENDSEN_TAU
+
+    
 
     # Validate positive values
     for name in ["steps", "dt", "n_particles", "temperature", "density", "sigma", "epsilon", "mass", "rcutoff"]:
