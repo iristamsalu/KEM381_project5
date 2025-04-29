@@ -124,3 +124,10 @@ To calculate viscosity you need to have `pressure.dat` file. NB! green_kubo.py d
 
 #### green_kubo.py output:
 1. Program creates a viscosity_plot.png file into the output folder.
+
+---
+
+### Notes:
+The `videos/` folder contains VMD and OVITO visuals (`.mp4` files) for different phases: `gas.mp4`, `liquid.mp4`, `critical.mp4` and `coexsistence.mp4`.
+
+---
